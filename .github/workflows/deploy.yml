@@ -2,9 +2,6 @@ name: AWS Connection Test
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   test-aws-connection:
@@ -25,18 +22,17 @@ jobs:
           ./gradlew test
 
       - name: Build Docker image
-        run: docker build -t filemanagement-service:latest .
+        run: docker build -t fm-app:latest .
 
       - name: Set environment variables
         run: |
-          echo "ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com" >> $GITHUB_ENV
-          echo "ECR_REPOSITORY=filemanagement-service" >> $GITHUB_ENV
+          echo "ECR_REPOSITORY=public.ecr.aws/d3m7g0r7/fm-app" >> $GITHUB_ENV
           echo "IMAGE_TAG=$(date +'%Y%m%d%H%M%S')-${GITHUB_SHA::8}" >> $GITHUB_ENV
 
       - name: Tag Docker image
         run: |
-          docker tag filemanagement-service:latest ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          docker tag filemanagement-service:latest ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          docker tag fm-app:latest ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          docker tag fm-app:latest ${{ env.ECR_REPOSITORY }}:latest
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
@@ -51,12 +47,12 @@ jobs:
 
       - name: Push Docker image to ECR
         run: |
-          docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY}}:${{ env.IMAGE_TAG }}
-          docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY}}:latest
+          docker push ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          docker push ${{ env.ECR_REPOSITORY }}:latest
 
       - name: Download task definition
         run: |
-          aws ecs describe-task-definition --task-definition filemanagement-app-2 --query taskDefinition > task-definition.json
+          aws ecs describe-task-definition --task-definition fm-app --query taskDefinition > task-definition.json
 
       - name: Update task definition with new image
         id: render-task-def
@@ -64,7 +60,7 @@ jobs:
         with:
           task-definition: task-definition.json
           container-name: app
-          image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY}}:${{ env.IMAGE_TAG }}
+          image: ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
           environment-variables: |
             SPRING_PROFILES_ACTIVE=dev
             HELLO=world
@@ -74,18 +70,23 @@ jobs:
           echo ${{ steps.render-task-def.outputs.task-definition }}
           cat ${{ steps.render-task-def.outputs.task-definition }}
 
+      - name: Set ECS environment variables
+        run: |
+          echo "ECS_CLUSTER=responsible-tiger-tv5bkg" >> $GITHUB_ENV
+          echo "ECS_SERVICE=fm-app-service-7b7or2me" >> $GITHUB_ENV
+
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-task-def.outputs.task-definition }}
-          cluster: myapp2
-          service: fm-app
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
 
       - name: Verify deployment
         run: |
           echo "Verifying deployment..."
-          SERVICE_STATUS=$(aws ecs describe-services --cluster myapp2 --services fm-app --query 'services[0].status' --output text)
+          SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text)
           
           if [ "$SERVICE_STATUS" = "ACTIVE" ]; then
             echo "Deployment successful! Service is active."
